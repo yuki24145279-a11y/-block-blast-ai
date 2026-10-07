@@ -1,0 +1,9 @@
+{
+  "name": "Block Blast 判定AI",
+  "short_name": "Blast AI",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#102315",
+  "theme_color": "#17301b",
+  "lang": "ja"
+}

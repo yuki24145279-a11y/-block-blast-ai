@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#17301b"><link rel="manifest" href="manifest.json">
+<title>Block Blast 判定AI</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#102315;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:720px;margin:auto;padding:16px}.card{background:#1c3621;border:1px solid #36553b;border-radius:16px;padding:14px;margin:12px 0}
+h1{font-size:22px;margin:0 0 6px}.sub{font-size:13px;opacity:.78;line-height:1.5}
+button{border:0;border-radius:11px;padding:12px 15px;margin:4px 4px 4px 0;font-weight:700;font-size:15px;background:#f1ca4c;color:#172017}
+button.secondary{background:#dbe8dc}button.dark{background:#304c35;color:white}
+input{max-width:100%;margin:8px 0}
+canvas{display:block;width:100%;border-radius:12px;background:#0c180e}
+#result{white-space:pre-line;line-height:1.7;font-size:15px}.ok{color:#f1ca4c;font-weight:700}
+</style></head>
+<body><main>
+<div class="card"><h1>🧩 Block Blast 判定AI</h1>
+<div class="sub">スクショを選択すると、8×8盤面と下の3ブロックを読み取り、3個をすべて置いた場合のおすすめ順を表示します。</div></div>
+<div class="card">
+<input id="file" type="file" accept="image/*"><br>
+<button id="go">🔍 自動判定</button><button id="reset" class="secondary">リセット</button>
+<div id="status" class="sub">スクショを選択してください。</div>
+</div>
+<canvas id="cv"></canvas>
+<div class="card"><b>判定結果</b><div id="result">—</div></div>
+<div class="card"><b>認識したブロック</b><div id="shapes" class="sub">—</div>
+<button id="edit" class="dark">盤面を手動修正</button><div id="editor"></div></div>
+</main>
+<script>
+const file=document.getElementById('file'),go=document.getElementById('go'),cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+const status=document.getElementById('status'),result=document.getElementById('result'),shapes=document.getElementById('shapes'),editor=document.getElementById('editor');
+let img=new Image(), board=[], pieces=[];
+
+// Reference geometry for the supplied iPhone screenshot. Uses ratios, so different resolution is okay.
+const B={x:.057,y:.239,w:.890,h:.410};
+const PR=[{x:.12,y:.730,w:.18,h:.095},{x:.43,y:.730,w:.18,h:.095},{x:.72,y:.730,w:.18,h:.095}];
+
+const CATALOG=[
+["1×1",[[0,0]]],["1×2",[[0,0],[0,1]]],["1×3",[[0,0],[0,1],[0,2]]],["1×4",[[0,0],[0,1],[0,2],[0,3]]],["1×5",[[0,0],[0,1],[0,2],[0,3],[0,4]]],
+["2×1",[[0,0],[1,0]]],["3×1",[[0,0],[1,0],[2,0]]],["4×1",[[0,0],[1,0],[2,0],[3,0]]],["5×1",[[0,0],[1,0],[2,0],[3,0],[4,0]]],
+["2×2",[[0,0],[0,1],[1,0],[1,1]]],
+["2×3",[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2]]],["3×2",[[0,0],[0,1],[1,0],[1,1],[2,0],[2,1]]],
+["2×2L",[[0,0],[1,0],[1,1]]],["2×2R",[[0,1],[1,0],[1,1]]],["2×2T",[[0,0],[0,1],[1,0]]],["2×2B",[[0,0],[0,1],[1,1]]],
+["3×3",[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]]]
+];
+
+function setStatus(t){status.textContent=t}
+function drawBase(){
+ cv.width=img.naturalWidth;cv.height=img.naturalHeight;ctx.drawImage(img,0,0);
+ const x=cv.width*B.x,y=cv.height*B.y,w=cv.width*B.w,h=cv.height*B.h;
+ ctx.strokeStyle="rgba(255,225,80,.9)";ctx.lineWidth=4;ctx.strokeRect(x,y,w,h);
+ ctx.strokeStyle="rgba(255,255,255,.2)";ctx.lineWidth=1;
+ for(let i=1;i<8;i++){ctx.beginPath();ctx.moveTo(x+w*i/8,y);ctx.lineTo(x+w*i/8,y+h);ctx.stroke();ctx.beginPath();ctx.moveTo(x,y+h*i/8);ctx.lineTo(x+w,y+h*i/8);ctx.stroke()}
+}
+function readBoard(){
+ const W=cv.width,H=cv.height,x=W*B.x,y=H*B.y,w=W*B.w,h=H*B.h;
+ board=Array.from({length:8},()=>Array(8).fill(false));
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  let bright=0,n=0;
+  for(let sy=-.25;sy<=.25;sy+=.125)for(let sx=-.25;sx<=.25;sx+=.125){
+   const px=Math.floor(x+w*(c+.5+sx)/8),py=Math.floor(y+h*(r+.5+sy)/8),d=ctx.getImageData(px,py,1,1).data;
+   // Empty cells are dark green; occupied cells are much brighter.
+   if((d[0]+d[1]+d[2])/3>75)bright++;n++;
+  }
+  board[r][c]=bright/n>.30;
+ }
+}
+function detectPiece(reg){
+ const W=cv.width,H=cv.height,rx=W*reg.x,ry=H*reg.y,rw=W*reg.w,rh=H*reg.h;
+ // Estimate block-cell centers using a 5x5 lattice and brightness.
+ let best=null;
+ for(let rows=1;rows<=5;rows++)for(let cols=1;cols<=5;cols++){
+  let occ=[],cnt=0;
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+   const px=Math.floor(rx+rw*(c+.5)/cols),py=Math.floor(ry+rh*(r+.5)/rows),d=ctx.getImageData(px,py,1,1).data;
+   const v=(d[0]+d[1]+d[2])/3>100;occ.push(v);if(v)cnt++;
+  }
+  if(cnt<1||cnt>9)continue;
+  const density=cnt/(rows*cols);
+  if(density<.35)continue;
+  // compare against catalog by dimensions/count
+  for(const q of CATALOG){
+   const s=q[1], sr=Math.max(...s.map(p=>p[0]))+1, sc=Math.max(...s.map(p=>p[1]))+1;
+   const score=Math.abs(rows-sr)+Math.abs(cols-sc)+Math.abs(cnt-s.length)*.7;
+   if(!best||score<best.score)best={name:q[0],s,score};
+  }
+ }
+ return best || {name:"3×3",s:CATALOG.find(q=>q[0]=="3×3")[1]};
+}
+function canPlace(b,s,r,c){return s.every(([dr,dc])=>r+dr<8&&c+dc<8&&!b[r+dr][c+dc])}
+function place(b,s,r,c){
+ const n=b.map(row=>row.slice());for(const [dr,dc] of s)n[r+dr][c+dc]=true;
+ let lines=0;
+ for(let r=0;r<8;r++)if(n[r].every(Boolean)){n[r].fill(false);lines++}
+ for(let c=0;c<8;c++)if(n.every(row=>row[c])){for(let r=0;r<8;r++)n[r][c]=false;lines++}
+ return [n,lines]
+}
+function score(b,lines){
+ const filled=b.flat().filter(Boolean).length;
+ let isolated=0;
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++)if(b[r][c]){
+  let adj=0;for(const [dr,dc] of [[1,0],[-1,0],[0,1],[0,-1]])if(r+dr>=0&&r+dr<8&&c+dc>=0&&c+dc<8&&b[r+dr][c+dc])adj++;
+  if(!adj)isolated++;
+ }
+ return lines*100000-filled*10-isolated*3;
+}
+function solve(){
+ let best=null;
+ function dfs(i,b,seq,lines){
+  if(i===pieces.length){let s=score(b,lines);if(!best||s>best.score)best={score:s,seq,lines};return}
+  let opts=[];for(let r=0;r<8;r++)for(let c=0;c<8;c++)if(canPlace(b,pieces[i].s,r,c))opts.push([r,c]);
+  if(!opts.length){dfs(i+1,b,[...seq,null],lines);return}
+  for(const [r,c] of opts){const [nb,l]=place(b,pieces[i].s,r,c);dfs(i+1,nb,[...seq,[r,c]],lines+l)}
+ }
+ dfs(0,board,[],0);return best
+}
+function drawAnswer(ans){
+ drawBase();const W=cv.width,H=cv.height,x=W*B.x,y=H*B.y,w=W*B.w,h=H*B.h;
+ const colors=["#ffd23f","#42dfff","#ff65b6"];
+ ans.seq.forEach((p,i)=>{if(!p)return;ctx.fillStyle=colors[i]+"66";ctx.strokeStyle=colors[i];ctx.lineWidth=5;
+  for(const [dr,dc] of pieces[i].s){const xx=x+w*(p[1]+dc)/8,yy=y+h*(p[0]+dr)/8;ctx.fillRect(xx,yy,w/8,h/8);ctx.strokeRect(xx+2,yy+2,w/8-4,h/8-4)}
+  ctx.fillStyle="#111";ctx.beginPath();ctx.arc(x+w*(p[1]+.22)/8,y+h*(p[0]+.22)/8,22,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle="#fff";ctx.font="bold 25px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(i+1,x+w*(p[1]+.22)/8,y+h*(p[0]+.22)/8);
+ });
+}
+function showEditor(){
+ editor.innerHTML="";
+ const g=document.createElement("div");g.style.cssText="display:grid;grid-template-columns:repeat(8,1fr);gap:3px;margin-top:10px";
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){const b=document.createElement("button");b.textContent=board[r][c]?"■":"";b.style.cssText="padding:0;aspect-ratio:1;margin:0;background:"+(board[r][c]?"#ddd":"#102015")+";color:#111";b.onclick=()=>{board[r][c]=!board[r][c];b.textContent=board[r][c]?"■":""};g.appendChild(b)}
+ editor.appendChild(g);
+ const b=document.createElement("button");b.textContent="修正した盤面で再計算";b.onclick=run;b.style.marginTop="10px";editor.appendChild(b)
+}
+async function run(){
+ if(!img.src)return;
+ setStatus("盤面を解析中…");drawBase();readBoard();
+ setStatus("3つのブロックを解析中…");pieces=PR.map(detectPiece);
+ shapes.innerHTML=pieces.map((p,i)=>`<span class="ok">${i+1}：${p.name}</span>`).join("　");
+ setStatus("全配置を探索中…");const ans=solve();
+ if(!ans){result.textContent="置ける場所が見つかりませんでした。";return}
+ drawAnswer(ans);
+ result.textContent=ans.seq.map((p,i)=>`${i+1}️⃣ ${pieces[i].name} → ${p?`上から${p[0]+1}行・左から${p[1]+1}列を左上に置く`:"置けません"}`).join("\n")+`\n\n予測ライン消去：${ans.lines}本`;
+ setStatus("完了！画像の①→②→③の順に置いてください。");
+}
+file.onchange=()=>{const f=file.files[0];if(!f)return;img.onload=()=>{drawBase();setStatus("画像を読み込みました。「自動判定」を押してください。")};img.src=URL.createObjectURL(f)}
+go.onclick=run;document.getElementById("edit").onclick=showEditor;document.getElementById("reset").onclick=()=>location.reload();
+if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script></body></html>
