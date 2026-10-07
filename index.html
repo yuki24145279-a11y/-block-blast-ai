@@ -126,6 +126,7 @@ function detectPiece(reg){
   name:"3×3",
   s:CATALOG.find(q=>q[0]=="3×3")[1]
  };
+} 
 function canPlace(b,s,r,c){return s.every(([dr,dc])=>r+dr<8&&c+dc<8&&!b[r+dr][c+dc])}
 function place(b,s,r,c){
  const n=b.map(row=>row.slice());for(const [dr,dc] of s)n[r+dr][c+dc]=true;
