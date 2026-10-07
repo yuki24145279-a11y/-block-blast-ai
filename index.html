@@ -66,27 +66,66 @@ function readBoard(){
  }
 }
 function detectPiece(reg){
- const W=cv.width,H=cv.height,rx=W*reg.x,ry=H*reg.y,rw=W*reg.w,rh=H*reg.h;
- // Estimate block-cell centers using a 5x5 lattice and brightness.
- let best=null;
- for(let rows=1;rows<=5;rows++)for(let cols=1;cols<=5;cols++){
-  let occ=[],cnt=0;
-  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
-   const px=Math.floor(rx+rw*(c+.5)/cols),py=Math.floor(ry+rh*(r+.5)/rows),d=ctx.getImageData(px,py,1,1).data;
-   const v=(d[0]+d[1]+d[2])/3>100;occ.push(v);if(v)cnt++;
-  }
-  if(cnt<1||cnt>9)continue;
-  const density=cnt/(rows*cols);
-  if(density<.35)continue;
-  // compare against catalog by dimensions/count
-  for(const q of CATALOG){
-   const s=q[1], sr=Math.max(...s.map(p=>p[0]))+1, sc=Math.max(...s.map(p=>p[1]))+1;
-   const score=Math.abs(rows-sr)+Math.abs(cols-sc)+Math.abs(cnt-s.length)*.7;
-   if(!best||score<best.score)best={name:q[0],s,score};
+ const W=cv.width,H=cv.height;
+ const rx=W*reg.x,ry=H*reg.y,rw=W*reg.w,rh=H*reg.h;
+
+ let minX=W,maxX=0,minY=H,maxY=0,found=0;
+
+ for(let y=Math.floor(ry);y<Math.floor(ry+rh);y+=3){
+  for(let x=Math.floor(rx);x<Math.floor(rx+rw);x+=3){
+   const d=ctx.getImageData(x,y,1,1).data;
+   const lum=(d[0]+d[1]+d[2])/3;
+   const sat=Math.max(d[0],d[1],d[2])-Math.min(d[0],d[1],d[2]);
+
+   if(lum>100 && sat>15){
+    minX=Math.min(minX,x);
+    maxX=Math.max(maxX,x);
+    minY=Math.min(minY,y);
+    maxY=Math.max(maxY,y);
+    found++;
+   }
   }
  }
- return best || {name:"3×3",s:CATALOG.find(q=>q[0]=="3×3")[1]};
-}
+
+ if(found<10){
+  return {
+   name:"3×3",
+   s:CATALOG.find(q=>q[0]=="3×3")[1]
+  };
+ }
+
+ const width=maxX-minX;
+ const height=maxY-minY;
+ const ratio=width/height;
+
+ // 正方形 → 3×3
+ if(ratio>0.85 && ratio<1.15){
+  return {
+   name:"3×3",
+   s:CATALOG.find(q=>q[0]=="3×3")[1]
+  };
+ }
+
+ // 縦長 → 3×2
+ if(ratio>0.45 && ratio<0.85){
+  return {
+   name:"3×2",
+   s:CATALOG.find(q=>q[0]=="3×2")[1]
+  };
+ }
+
+ // 横長 → 2×3
+ if(ratio>=1.15){
+  return {
+   name:"2×3",
+   s:CATALOG.find(q=>q[0]=="2×3")[1]
+  };
+ }
+
+ return {
+  name:"3×3",
+  s:CATALOG.find(q=>q[0]=="3×3")[1]
+ };
 function canPlace(b,s,r,c){return s.every(([dr,dc])=>r+dr<8&&c+dc<8&&!b[r+dr][c+dc])}
 function place(b,s,r,c){
  const n=b.map(row=>row.slice());for(const [dr,dc] of s)n[r+dr][c+dc]=true;
